@@ -10,6 +10,7 @@ on:
         default: 10
 env:
   TZ: 'Europe/Amsterdam'
+  UV_SKIP_WHEEL_FILENAME_CHECK: '1'
 
 jobs:
   sync:
