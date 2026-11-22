@@ -16,7 +16,26 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
+
+      # Vernieuwde Garmin-token van de vorige run terugzetten (versleuteld in de Actions-cache).
+      - name: Restore Garmin token
+        uses: actions/cache/restore@v4
+        with:
+          path: .garmin-token.enc
+          key: garmin-token-${{ github.run_id }}
+          restore-keys: garmin-token-
+
+      - name: Decrypt Garmin token
+        env:
+          TOKEN_KEY: ${{ secrets.NOTION_TOKEN }}
+        run: |
+          if [ -f .garmin-token.enc ]; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -pass env:TOKEN_KEY -in .garmin-token.enc -out "$HOME/.garmin_token.json" \
+              && echo "Bewaarde token teruggezet." || { echo "Ontsleutelen mislukt, val terug op secret."; rm -f "$HOME/.garmin_token.json"; }
+          else
+            echo "Geen bewaarde token, gebruik GARMIN_AUTH_TOKEN."
+          fi
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
@@ -39,3 +58,20 @@ jobs:
           uv run python -m src.workflows.personal-records
           uv run python -m src.workflows.daily-steps
           uv run python -m src.workflows.sleep-data
+
+      # Vernieuwde token versleuteld bewaren voor de volgende run, ook als een stap faalde.
+      - name: Encrypt Garmin token
+        if: always()
+        env:
+          TOKEN_KEY: ${{ secrets.NOTION_TOKEN }}
+        run: |
+          if [ -s "$HOME/.garmin_token.json" ]; then
+            openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:TOKEN_KEY -in "$HOME/.garmin_token.json" -out .garmin-token.enc
+          fi
+
+      - name: Save Garmin token
+        if: always() && hashFiles('.garmin-token.enc') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .garmin-token.enc
+          key: garmin-token-${{ github.run_id }}
