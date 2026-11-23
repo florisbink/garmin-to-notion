@@ -6,7 +6,7 @@ from dotenv import load_dotenv, dotenv_values
 from src.helpers import get_garmin_client, get_notion_client
 
 # Constants
-local_tz = pytz.timezone("America/Toronto")
+local_tz = pytz.timezone("Europe/Amsterdam")
 
 # Load environment variables
 load_dotenv()
@@ -50,6 +50,34 @@ def sleep_data_exists(client, database_id, sleep_date):
     return results[0] if results else None  # Ensure it returns None instead of causing IndexError
 
 
+def sleep_score(daily_sleep):
+    """Garmin slaapscore (0-100) en oordeel (EXCELLENT/GOOD/FAIR/POOR), of (None, None)."""
+    overall = ((daily_sleep or {}).get('sleepScores') or {}).get('overall') or {}
+    return overall.get('value'), overall.get('qualifierKey')
+
+
+def score_properties(daily_sleep):
+    value, qualifier = sleep_score(daily_sleep)
+    props = {
+        "Times": {"rich_text": [{"text": {
+            "content": f"{format_time_readable(daily_sleep.get('sleepStartTimestampGMT'))} → {format_time_readable(daily_sleep.get('sleepEndTimestampGMT'))}"}}]},
+    }
+    if value is not None:
+        props["Sleep Score"] = {"number": value}
+    if qualifier:
+        props["Sleep Quality"] = {"rich_text": [{"text": {"content": qualifier}}]}
+    return props
+
+
+def update_sleep_score(client, existing, sleep_data):
+    """Bestaande nacht bijwerken met score en tijden (Nederlandse tijd)."""
+    daily_sleep = sleep_data.get('dailySleepDTO', {})
+    if not daily_sleep:
+        return
+    client.pages.update(page_id=existing["id"], properties=score_properties(daily_sleep))
+    print(f"Updated sleep score for: {daily_sleep.get('calendarDate')}")
+
+
 def create_sleep_data(client, database_id, sleep_data, skip_zero_sleep=True):
     daily_sleep = sleep_data.get('dailySleepDTO', {})
     if not daily_sleep:
@@ -83,6 +111,7 @@ def create_sleep_data(client, database_id, sleep_data, skip_zero_sleep=True):
         "Awake Time": {"rich_text": [{"text": {"content": format_duration(daily_sleep.get('awakeSleepSeconds', 0))}}]},
         "Resting HR": {"number": sleep_data.get('restingHeartRate', 0)}
     }
+    properties.update(score_properties(daily_sleep))
 
     client.pages.create(parent={"database_id": database_id}, properties=properties, icon={"emoji": "😴"})
     print(f"Created sleep entry for: {sleep_date}")
@@ -100,7 +129,10 @@ def main():
     data = get_sleep_data(garmin_client)
     if data:
         sleep_date = data.get('dailySleepDTO', {}).get('calendarDate')
-        if sleep_date and not sleep_data_exists(notion_client, database_id, sleep_date):
+        existing = sleep_data_exists(notion_client, database_id, sleep_date) if sleep_date else None
+        if existing:
+            update_sleep_score(notion_client, existing, data)
+        elif sleep_date:
             create_sleep_data(notion_client, database_id, data, skip_zero_sleep=True)
 
 
